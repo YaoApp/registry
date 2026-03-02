@@ -1,0 +1,161 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 0.1.0). Leave empty to use version from code."
+        required: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.25"]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Code Quality
+        run: |
+          make vet
+          make fmt-check
+
+      - name: Run Unit Tests
+        run: make unit-test
+
+      - name: Run E2E Tests
+        run: make e2e-test
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go: ["1.25"]
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Get Version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(grep 'var Version' handlers/info.go | awk '{print $4}' | sed 's/"//g')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build linux/${{ matrix.arch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          go build -ldflags="-s -w -X github.com/yaoapp/registry/handlers.Version=${{ steps.version.outputs.version }}" \
+            -o dist/registry-${{ steps.version.outputs.version }}-linux-${{ matrix.arch }} .
+          chmod +x dist/registry-*
+
+      - name: Verify (amd64 only)
+        if: matrix.arch == 'amd64'
+        run: dist/registry-${{ steps.version.outputs.version }}-linux-amd64 version
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-linux-${{ matrix.arch }}
+          path: dist/registry-*
+
+  build-darwin:
+    needs: test
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        go: ["1.25"]
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go ${{ matrix.go }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Get Version
+        id: version
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(grep 'var Version' handlers/info.go | awk '{print $4}' | sed 's/"//g')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build darwin/${{ matrix.arch }}
+        env:
+          CGO_ENABLED: "0"
+          GOOS: darwin
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          go build -ldflags="-s -w -X github.com/yaoapp/registry/handlers.Version=${{ steps.version.outputs.version }}" \
+            -o dist/registry-${{ steps.version.outputs.version }}-darwin-${{ matrix.arch }} .
+          chmod +x dist/registry-*
+
+      - name: Verify (arm64 on Apple Silicon runner)
+        if: matrix.arch == 'arm64'
+        run: dist/registry-${{ steps.version.outputs.version }}-darwin-arm64 version
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-darwin-${{ matrix.arch }}
+          path: dist/registry-*
+
+  release:
+    needs: [build-linux, build-darwin]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List Artifacts
+        run: ls -lh dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/registry-*
+          generate_release_notes: true
