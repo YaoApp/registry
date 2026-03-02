@@ -1,0 +1,9 @@
+.git
+.github
+dist
+data
+design.md
+docs
+*.out
+*.db
+.DS_Store
