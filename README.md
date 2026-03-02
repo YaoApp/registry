@@ -104,7 +104,7 @@ A client SDK lives in the [yao](https://github.com/yaoapp/yao) repository at `re
 ```go
 import "github.com/yaoapp/yao/registry"
 
-c := registry.New("http://localhost:8080",
+c := registry.New("https://registry.yaoagents.com",
     registry.WithAuth("admin", "s3cret"),
 )
 
