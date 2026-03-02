@@ -57,6 +57,18 @@ func RunStart(args []string) {
 	if err := af.Load(); err != nil {
 		log.Fatalf("load auth file: %v", err)
 	}
+
+	// Seed initial user from environment (useful for Docker / CI)
+	if initUser := os.Getenv("REGISTRY_INIT_USER"); initUser != "" {
+		if initPass := os.Getenv("REGISTRY_INIT_PASS"); initPass != "" {
+			if err := af.AddUser(initUser, initPass); err != nil && err != auth.ErrUserExists {
+				log.Fatalf("init user: %v", err)
+			} else if err == nil {
+				fmt.Fprintf(os.Stderr, "Created initial user %q from environment\n", initUser)
+			}
+		}
+	}
+
 	if !af.HasUsers() {
 		fmt.Fprintf(os.Stderr, "Warning: no push users configured. Run `registry user add` to add one.\n")
 	}
