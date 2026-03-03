@@ -35,7 +35,6 @@ func (s *Server) TagSet(c *gin.Context) {
 		return
 	}
 
-	// Verify the target version exists
 	_, err = models.GetVersion(s.DB, pkg.ID, body.Version, "", "", "")
 	if err == sql.ErrNoRows {
 		jsonError(c, http.StatusNotFound, "version "+body.Version+" not found")
@@ -55,18 +54,10 @@ func (s *Server) TagSet(c *gin.Context) {
 	distTags[tag] = body.Version
 	distTagsJSON, _ := json.Marshal(distTags)
 
-	tx, err := s.DB.Begin()
-	if err != nil {
+	if err := models.UpdateDistTags(s.DB, pkg.ID, string(distTagsJSON)); err != nil {
 		jsonError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer tx.Rollback()
-
-	if err := models.UpdateDistTags(tx, pkg.ID, string(distTagsJSON)); err != nil {
-		jsonError(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	tx.Commit()
 
 	c.JSON(http.StatusOK, gin.H{"tag": tag, "version": body.Version})
 }
@@ -108,18 +99,10 @@ func (s *Server) TagDelete(c *gin.Context) {
 	delete(distTags, tag)
 	distTagsJSON, _ := json.Marshal(distTags)
 
-	tx, err := s.DB.Begin()
-	if err != nil {
+	if err := models.UpdateDistTags(s.DB, pkg.ID, string(distTagsJSON)); err != nil {
 		jsonError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	defer tx.Rollback()
-
-	if err := models.UpdateDistTags(tx, pkg.ID, string(distTagsJSON)); err != nil {
-		jsonError(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	tx.Commit()
 
 	c.JSON(http.StatusOK, gin.H{"deleted": tag})
 }

@@ -30,8 +30,8 @@ type Package struct {
 // UpsertPackage inserts a new package or updates the existing one's metadata.
 // On conflict (type, scope, name), it updates description, keywords, and other
 // metadata fields, and explicitly sets updated_at.
-func UpsertPackage(tx *sql.Tx, pkg *Package) (int64, error) {
-	_, err := tx.Exec(`
+func UpsertPackage(db *sql.DB, pkg *Package) (int64, error) {
+	_, err := db.Exec(`
 		INSERT INTO packages (type, scope, name, description, keywords, icon, license,
 			author, maintainers, homepage, repository, bugs, readme, dist_tags)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -55,10 +55,8 @@ func UpsertPackage(tx *sql.Tx, pkg *Package) (int64, error) {
 		return 0, fmt.Errorf("upsert package: %w", err)
 	}
 
-	// Always query the real ID — LastInsertId is unreliable with ON CONFLICT
-	// because SQLite may return a phantom autoincrement value.
 	var id int64
-	err = tx.QueryRow(
+	err = db.QueryRow(
 		`SELECT id FROM packages WHERE type=? AND scope=? AND name=?`,
 		pkg.Type, pkg.Scope, pkg.Name,
 	).Scan(&id)
@@ -220,8 +218,8 @@ func SearchPackages(db *sql.DB, q, pkgType string, page, pageSize int) (*Package
 }
 
 // UpdateDistTags updates the dist_tags JSON field for a package.
-func UpdateDistTags(tx *sql.Tx, pkgID int64, distTags string) error {
-	_, err := tx.Exec(
+func UpdateDistTags(db *sql.DB, pkgID int64, distTags string) error {
+	_, err := db.Exec(
 		`UPDATE packages SET dist_tags=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
 		distTags, pkgID,
 	)

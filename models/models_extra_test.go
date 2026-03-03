@@ -5,71 +5,62 @@ import (
 	"testing"
 )
 
-func TestGetLatestNonPrereleaseTx(t *testing.T) {
+func TestGetLatestNonPrerelease_ViaDB(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	pkgID, _ := UpsertPackage(tx, &Package{
+	pkgID, _ := UpsertPackage(db, &Package{
 		Type: "assistant", Scope: "@yao", Name: "keeper",
 		Keywords: "[]", DistTags: "{}",
 	})
-	InsertVersion(tx, &Version{
+	InsertVersion(db, &Version{
 		PackageID: pkgID, Version: "1.0.0",
 		Digest: "sha256:a", Size: 100, Metadata: "{}", FilePath: "a.zip",
 	})
-	InsertVersion(tx, &Version{
+	InsertVersion(db, &Version{
 		PackageID: pkgID, Version: "2.0.0-beta",
 		Digest: "sha256:b", Size: 200, Metadata: "{}", FilePath: "b.zip",
 	})
-	InsertVersion(tx, &Version{
+	InsertVersion(db, &Version{
 		PackageID: pkgID, Version: "1.1.0",
 		Digest: "sha256:c", Size: 300, Metadata: "{}", FilePath: "c.zip",
 	})
-	tx.Commit()
 
-	tx2, _ := db.Begin()
-	defer tx2.Rollback()
-	ver, err := GetLatestNonPrereleaseTx(tx2, pkgID)
+	ver, err := GetLatestNonPrerelease(db, pkgID)
 	if err != nil {
-		t.Fatalf("GetLatestNonPrereleaseTx: %v", err)
+		t.Fatalf("GetLatestNonPrerelease: %v", err)
 	}
 	if ver != "1.1.0" {
 		t.Errorf("version = %q, want 1.1.0", ver)
 	}
 }
 
-func TestGetLatestNonPrereleaseTx_AfterDelete(t *testing.T) {
+func TestGetLatestNonPrerelease_AfterDelete(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	pkgID, _ := UpsertPackage(tx, &Package{
+	pkgID, _ := UpsertPackage(db, &Package{
 		Type: "assistant", Scope: "@yao", Name: "keeper",
 		Keywords: "[]", DistTags: "{}",
 	})
-	id1, _ := InsertVersion(tx, &Version{
+	InsertVersion(db, &Version{
 		PackageID: pkgID, Version: "1.0.0",
 		Digest: "sha256:a", Size: 100, Metadata: "{}", FilePath: "a.zip",
 	})
-	InsertVersion(tx, &Version{
+	id2, _ := InsertVersion(db, &Version{
 		PackageID: pkgID, Version: "1.1.0",
 		Digest: "sha256:b", Size: 200, Metadata: "{}", FilePath: "b.zip",
 	})
-	tx.Commit()
 
-	tx2, _ := db.Begin()
-	// Delete 1.1.0's predecessor
-	DeleteVersion(tx2, id1+1) // id of 1.1.0
+	DeleteVersion(db, id2)
 
-	ver, err := GetLatestNonPrereleaseTx(tx2, pkgID)
+	ver, err := GetLatestNonPrerelease(db, pkgID)
 	if err != nil {
-		t.Fatalf("GetLatestNonPrereleaseTx: %v", err)
+		t.Fatalf("GetLatestNonPrerelease: %v", err)
 	}
 	if ver != "1.0.0" {
 		t.Errorf("version = %q, want 1.0.0 after delete", ver)
 	}
-	tx2.Commit()
 }
 
 func TestInitDB_BadPath(t *testing.T) {
@@ -121,12 +112,10 @@ func TestListPackages_InvalidPageDefaults(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	UpsertPackage(tx, &Package{
+	UpsertPackage(db, &Package{
 		Type: "assistant", Scope: "@yao", Name: "test",
 		Keywords: "[]", DistTags: "{}",
 	})
-	tx.Commit()
 
 	r, err := ListPackages(db, "assistant", "", "", 0, -1)
 	if err != nil {
@@ -146,17 +135,9 @@ func TestUpsertPackage_ThreeTimesReturnsSameID(t *testing.T) {
 		Keywords: "[]", DistTags: "{}",
 	}
 
-	tx1, _ := db.Begin()
-	id1, _ := UpsertPackage(tx1, pkg)
-	tx1.Commit()
-
-	tx2, _ := db.Begin()
-	id2, _ := UpsertPackage(tx2, pkg)
-	tx2.Commit()
-
-	tx3, _ := db.Begin()
-	id3, _ := UpsertPackage(tx3, pkg)
-	tx3.Commit()
+	id1, _ := UpsertPackage(db, pkg)
+	id2, _ := UpsertPackage(db, pkg)
+	id3, _ := UpsertPackage(db, pkg)
 
 	if id1 != id2 || id2 != id3 {
 		t.Errorf("IDs differ: %d, %d, %d", id1, id2, id3)
@@ -169,22 +150,18 @@ func TestDeleteDependenciesByVersion_Cascade(t *testing.T) {
 
 	_, verID := setupVersionForDep(t, db, "assistant", "@yao", "keeper", "1.0.0")
 
-	tx, _ := db.Begin()
-	InsertDependencies(tx, verID, []Dependency{
+	InsertDependencies(db, verID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "a", DepVersion: "^1"},
 		{DepType: "mcp", DepScope: "@yao", DepName: "b", DepVersion: "^2"},
 		{DepType: "assistant", DepScope: "@yao", DepName: "c", DepVersion: "~1"},
 	})
-	tx.Commit()
 
 	deps, _ := GetDependencies(db, verID)
 	if len(deps) != 3 {
 		t.Fatalf("before: len = %d", len(deps))
 	}
 
-	tx2, _ := db.Begin()
-	DeleteDependenciesByVersion(tx2, verID)
-	tx2.Commit()
+	DeleteDependenciesByVersion(db, verID)
 
 	deps, _ = GetDependencies(db, verID)
 	if len(deps) != 0 {

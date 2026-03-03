@@ -7,15 +7,14 @@ import (
 
 func setupVersionForDep(t *testing.T, db *sql.DB, pkgType, scope, name, ver string) (pkgID, verID int64) {
 	t.Helper()
-	tx, _ := db.Begin()
-	pkgID, err := UpsertPackage(tx, &Package{
+	pkgID, err := UpsertPackage(db, &Package{
 		Type: pkgType, Scope: scope, Name: name,
 		Keywords: "[]", DistTags: "{}",
 	})
 	if err != nil {
 		t.Fatalf("setup package: %v", err)
 	}
-	verID, err = InsertVersion(tx, &Version{
+	verID, err = InsertVersion(db, &Version{
 		PackageID: pkgID, Version: ver,
 		Digest: "sha256:test", Size: 100,
 		Metadata: "{}", FilePath: name + ".zip",
@@ -23,7 +22,6 @@ func setupVersionForDep(t *testing.T, db *sql.DB, pkgType, scope, name, ver stri
 	if err != nil {
 		t.Fatalf("setup version: %v", err)
 	}
-	tx.Commit()
 	return
 }
 
@@ -37,11 +35,9 @@ func TestInsertAndGetDependencies(t *testing.T) {
 		{DepType: "assistant", DepScope: "@yao", DepName: "translator", DepVersion: "~2.0.0", Optional: true},
 	}
 
-	tx, _ := db.Begin()
-	if err := InsertDependencies(tx, verID, deps); err != nil {
+	if err := InsertDependencies(db, verID, deps); err != nil {
 		t.Fatalf("InsertDependencies: %v", err)
 	}
-	tx.Commit()
 
 	got, err := GetDependencies(db, verID)
 	if err != nil {
@@ -88,15 +84,12 @@ func TestGetDependents(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	// keeper@1.0.0 depends on keeper-tools@^1.0.0
 	_, keeperVerID := setupVersionForDep(t, db, "assistant", "@yao", "keeper", "1.0.0")
 	setupVersionForDep(t, db, "mcp", "@yao", "keeper-tools", "1.2.0")
 
-	tx, _ := db.Begin()
-	InsertDependencies(tx, keeperVerID, []Dependency{
+	InsertDependencies(db, keeperVerID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "keeper-tools", DepVersion: "^1.0.0"},
 	})
-	tx.Commit()
 
 	dependents, err := GetDependents(db, "mcp", "@yao", "keeper-tools")
 	if err != nil {
@@ -127,19 +120,16 @@ func TestResolveDependencyTree(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	// Build: keeper@1.0.0 -> keeper-tools@1.2.0 -> translator@2.0.0
 	_, keeperVerID := setupVersionForDep(t, db, "assistant", "@yao", "keeper", "1.0.0")
 	_, ktVerID := setupVersionForDep(t, db, "mcp", "@yao", "keeper-tools", "1.2.0")
 	setupVersionForDep(t, db, "assistant", "@yao", "translator", "2.0.0")
 
-	tx, _ := db.Begin()
-	InsertDependencies(tx, keeperVerID, []Dependency{
+	InsertDependencies(db, keeperVerID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "keeper-tools", DepVersion: "^1.0.0"},
 	})
-	InsertDependencies(tx, ktVerID, []Dependency{
+	InsertDependencies(db, ktVerID, []Dependency{
 		{DepType: "assistant", DepScope: "@yao", DepName: "translator", DepVersion: "~2.0.0"},
 	})
-	tx.Commit()
 
 	tree, err := ResolveDependencyTree(db, keeperVerID)
 	if err != nil {
@@ -172,18 +162,15 @@ func TestResolveDependencyTree_CircularDetection(t *testing.T) {
 	db, _ := TestDB()
 	defer db.Close()
 
-	// A@1.0.0 -> B@1.0.0 -> A@1.0.0 (circular)
 	_, aVerID := setupVersionForDep(t, db, "mcp", "@yao", "tool-a", "1.0.0")
 	_, bVerID := setupVersionForDep(t, db, "mcp", "@yao", "tool-b", "1.0.0")
 
-	tx, _ := db.Begin()
-	InsertDependencies(tx, aVerID, []Dependency{
+	InsertDependencies(db, aVerID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "tool-b", DepVersion: "^1.0.0"},
 	})
-	InsertDependencies(tx, bVerID, []Dependency{
+	InsertDependencies(db, bVerID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "tool-a", DepVersion: "^1.0.0"},
 	})
-	tx.Commit()
 
 	tree, err := ResolveDependencyTree(db, aVerID)
 	if err != nil {
@@ -209,22 +196,18 @@ func TestDeleteDependenciesByVersion(t *testing.T) {
 	defer db.Close()
 	_, verID := setupVersionForDep(t, db, "assistant", "@yao", "keeper", "1.0.0")
 
-	tx, _ := db.Begin()
-	InsertDependencies(tx, verID, []Dependency{
+	InsertDependencies(db, verID, []Dependency{
 		{DepType: "mcp", DepScope: "@yao", DepName: "tool", DepVersion: "^1.0.0"},
 	})
-	tx.Commit()
 
 	deps, _ := GetDependencies(db, verID)
 	if len(deps) != 1 {
 		t.Fatalf("before delete: len = %d", len(deps))
 	}
 
-	tx2, _ := db.Begin()
-	if err := DeleteDependenciesByVersion(tx2, verID); err != nil {
+	if err := DeleteDependenciesByVersion(db, verID); err != nil {
 		t.Fatalf("DeleteDependenciesByVersion: %v", err)
 	}
-	tx2.Commit()
 
 	deps, _ = GetDependencies(db, verID)
 	if len(deps) != 0 {

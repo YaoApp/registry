@@ -22,8 +22,8 @@ type Version struct {
 }
 
 // InsertVersion inserts a new version row. Returns the new row ID.
-func InsertVersion(tx *sql.Tx, v *Version) (int64, error) {
-	res, err := tx.Exec(`
+func InsertVersion(db *sql.DB, v *Version) (int64, error) {
+	res, err := db.Exec(`
 		INSERT INTO versions (package_id, version, os, arch, variant, digest, size, metadata, file_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		v.PackageID, v.Version, v.OS, v.Arch, v.Variant,
@@ -131,8 +131,8 @@ func ListVersionsByPlatform(db *sql.DB, packageID int64, version, os, arch, vari
 }
 
 // DeleteVersion removes a version row by ID.
-func DeleteVersion(tx *sql.Tx, id int64) error {
-	_, err := tx.Exec(`DELETE FROM versions WHERE id=?`, id)
+func DeleteVersion(db *sql.DB, id int64) error {
+	_, err := db.Exec(`DELETE FROM versions WHERE id=?`, id)
 	return err
 }
 
@@ -148,18 +148,6 @@ func CountVersions(db *sql.DB, packageID int64) (int, error) {
 func GetLatestNonPrerelease(db *sql.DB, packageID int64) (string, error) {
 	var ver string
 	err := db.QueryRow(`
-		SELECT version FROM versions
-		WHERE package_id=? AND version NOT LIKE '%-%'
-		ORDER BY id DESC LIMIT 1`, packageID,
-	).Scan(&ver)
-	return ver, err
-}
-
-// GetLatestNonPrereleaseTx is the same as GetLatestNonPrerelease but runs
-// within an active transaction (sees uncommitted deletes).
-func GetLatestNonPrereleaseTx(tx *sql.Tx, packageID int64) (string, error) {
-	var ver string
-	err := tx.QueryRow(`
 		SELECT version FROM versions
 		WHERE package_id=? AND version NOT LIKE '%-%'
 		ORDER BY id DESC LIMIT 1`, packageID,

@@ -28,8 +28,8 @@ type DependencyTreeNode struct {
 }
 
 // InsertDependencies bulk-inserts dependencies for a given version.
-func InsertDependencies(tx *sql.Tx, versionID int64, deps []Dependency) error {
-	stmt, err := tx.Prepare(`
+func InsertDependencies(db *sql.DB, versionID int64, deps []Dependency) error {
+	stmt, err := db.Prepare(`
 		INSERT INTO dependencies (version_id, dep_type, dep_scope, dep_name, dep_version, optional)
 		VALUES (?, ?, ?, ?, ?, ?)`)
 	if err != nil {
@@ -199,7 +199,7 @@ func ResolveDependencyTree(db *sql.DB, versionID int64) ([]DependencyTreeNode, e
 }
 
 // DeleteDependenciesByVersion removes all dependencies for a given version.
-func DeleteDependenciesByVersion(tx *sql.Tx, versionID int64) error {
-	_, err := tx.Exec(`DELETE FROM dependencies WHERE version_id=?`, versionID)
+func DeleteDependenciesByVersion(db *sql.DB, versionID int64) error {
+	_, err := db.Exec(`DELETE FROM dependencies WHERE version_id=?`, versionID)
 	return err
 }

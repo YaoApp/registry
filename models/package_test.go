@@ -27,18 +27,14 @@ func TestUpsertPackage_Insert(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	defer tx.Rollback()
-
 	pkg := testPkg()
-	id, err := UpsertPackage(tx, pkg)
+	id, err := UpsertPackage(db, pkg)
 	if err != nil {
 		t.Fatalf("UpsertPackage: %v", err)
 	}
 	if id < 1 {
 		t.Errorf("id = %d, want > 0", id)
 	}
-	tx.Commit()
 
 	got, err := GetPackageByID(db, id)
 	if err != nil {
@@ -63,17 +59,13 @@ func TestUpsertPackage_Update(t *testing.T) {
 	defer db.Close()
 
 	pkg := testPkg()
-	tx1, _ := db.Begin()
-	id1, _ := UpsertPackage(tx1, pkg)
-	tx1.Commit()
+	id1, _ := UpsertPackage(db, pkg)
 
 	pkg.Description = "Updated description"
-	tx2, _ := db.Begin()
-	id2, err := UpsertPackage(tx2, pkg)
+	id2, err := UpsertPackage(db, pkg)
 	if err != nil {
 		t.Fatalf("upsert update: %v", err)
 	}
-	tx2.Commit()
 
 	if id2 != id1 {
 		t.Errorf("id changed from %d to %d on upsert", id1, id2)
@@ -91,9 +83,7 @@ func TestGetPackage(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	UpsertPackage(tx, testPkg())
-	tx.Commit()
+	UpsertPackage(db, testPkg())
 
 	got, err := GetPackage(db, "assistant", "@yao", "keeper")
 	if err != nil {
@@ -125,12 +115,10 @@ func TestListPackages(t *testing.T) {
 	defer db.Close()
 
 	for _, name := range []string{"alpha", "beta", "gamma"} {
-		tx, _ := db.Begin()
-		UpsertPackage(tx, &Package{
+		UpsertPackage(db, &Package{
 			Type: "assistant", Scope: "@yao", Name: name,
 			Description: name + " assistant", Keywords: "[]", DistTags: "{}",
 		})
-		tx.Commit()
 	}
 
 	result, err := ListPackages(db, "assistant", "", "", 1, 10)
@@ -153,12 +141,10 @@ func TestListPackages_Pagination(t *testing.T) {
 	defer db.Close()
 
 	for i := 0; i < 5; i++ {
-		tx, _ := db.Begin()
-		UpsertPackage(tx, &Package{
+		UpsertPackage(db, &Package{
 			Type: "mcp", Scope: "@yao", Name: fmt.Sprintf("tool-%d", i),
 			Keywords: "[]", DistTags: "{}",
 		})
-		tx.Commit()
 	}
 
 	r, _ := ListPackages(db, "mcp", "", "", 1, 2)
@@ -182,10 +168,8 @@ func TestListPackages_FilterScope(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	UpsertPackage(tx, &Package{Type: "assistant", Scope: "@yao", Name: "a", Keywords: "[]", DistTags: "{}"})
-	UpsertPackage(tx, &Package{Type: "assistant", Scope: "@community", Name: "b", Keywords: "[]", DistTags: "{}"})
-	tx.Commit()
+	UpsertPackage(db, &Package{Type: "assistant", Scope: "@yao", Name: "a", Keywords: "[]", DistTags: "{}"})
+	UpsertPackage(db, &Package{Type: "assistant", Scope: "@community", Name: "b", Keywords: "[]", DistTags: "{}"})
 
 	r, _ := ListPackages(db, "assistant", "@yao", "", 1, 10)
 	if r.Total != 1 {
@@ -200,12 +184,10 @@ func TestListPackages_Search(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	UpsertPackage(tx, &Package{Type: "assistant", Scope: "@yao", Name: "keeper",
+	UpsertPackage(db, &Package{Type: "assistant", Scope: "@yao", Name: "keeper",
 		Description: "Knowledge keeper", Keywords: `["knowledge"]`, DistTags: "{}"})
-	UpsertPackage(tx, &Package{Type: "assistant", Scope: "@yao", Name: "translator",
+	UpsertPackage(db, &Package{Type: "assistant", Scope: "@yao", Name: "translator",
 		Description: "Translation tool", Keywords: `["i18n"]`, DistTags: "{}"})
-	tx.Commit()
 
 	r, _ := ListPackages(db, "assistant", "", "knowledge", 1, 10)
 	if r.Total != 1 {
@@ -223,14 +205,12 @@ func TestSearchPackages(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	UpsertPackage(tx, &Package{Type: "assistant", Scope: "@yao", Name: "keeper",
+	UpsertPackage(db, &Package{Type: "assistant", Scope: "@yao", Name: "keeper",
 		Description: "Data management", Keywords: "[]", DistTags: "{}"})
-	UpsertPackage(tx, &Package{Type: "mcp", Scope: "@yao", Name: "data-tools",
+	UpsertPackage(db, &Package{Type: "mcp", Scope: "@yao", Name: "data-tools",
 		Description: "Data processing tools", Keywords: "[]", DistTags: "{}"})
-	UpsertPackage(tx, &Package{Type: "robot", Scope: "@yao", Name: "bot",
+	UpsertPackage(db, &Package{Type: "robot", Scope: "@yao", Name: "bot",
 		Description: "A simple bot", Keywords: "[]", DistTags: "{}"})
-	tx.Commit()
 
 	r, _ := SearchPackages(db, "data", "", 1, 10)
 	if r.Total != 2 {
@@ -250,16 +230,12 @@ func TestUpdateDistTags(t *testing.T) {
 	}
 	defer db.Close()
 
-	tx, _ := db.Begin()
-	id, _ := UpsertPackage(tx, testPkg())
-	tx.Commit()
+	id, _ := UpsertPackage(db, testPkg())
 
-	tx2, _ := db.Begin()
-	err = UpdateDistTags(tx2, id, `{"latest":"1.0.0","canary":"1.1.0-beta"}`)
+	err = UpdateDistTags(db, id, `{"latest":"1.0.0","canary":"1.1.0-beta"}`)
 	if err != nil {
 		t.Fatalf("UpdateDistTags: %v", err)
 	}
-	tx2.Commit()
 
 	got, _ := GetPackageByID(db, id)
 	if got.DistTags != `{"latest":"1.0.0","canary":"1.1.0-beta"}` {

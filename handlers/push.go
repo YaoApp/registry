@@ -19,13 +19,11 @@ func (s *Server) Push(c *gin.Context) {
 	}
 	version := c.Param("version")
 
-	// Early size check via Content-Length header
 	if c.Request.ContentLength > s.Config.MaxSizeBytes() {
 		jsonError(c, http.StatusRequestEntityTooLarge, "package too large")
 		return
 	}
 
-	// Limit body reader to prevent abuse
 	limitReader := http.MaxBytesReader(c.Writer, c.Request.Body, s.Config.MaxSizeBytes())
 	zipData, err := io.ReadAll(limitReader)
 	if err != nil {
@@ -33,7 +31,6 @@ func (s *Server) Push(c *gin.Context) {
 		return
 	}
 
-	// Extract and validate pkg.yao
 	pkgYao, err := pack.ExtractPkgYao(zipData)
 	if err != nil {
 		jsonError(c, http.StatusBadRequest, "extract pkg.yao: "+err.Error())
@@ -45,13 +42,9 @@ func (s *Server) Push(c *gin.Context) {
 		return
 	}
 
-	// Extract README
 	readme, _ := pack.ExtractReadme(zipData)
-
-	// Compute digest
 	digest := storage.ComputeDigest(zipData)
 
-	// Determine platform fields for release packages
 	goos, arch, variant := "", "", ""
 	if pkgYao.Platform != nil {
 		goos = pkgYao.Platform.OS
@@ -59,7 +52,6 @@ func (s *Server) Push(c *gin.Context) {
 		variant = pkgYao.Platform.Variant
 	}
 
-	// Store the file
 	filePath, err := storage.Store(s.Config.DataPath, singularToPlural(singular),
 		scope, name, version, goos, arch, variant, zipData)
 	if err != nil {
@@ -67,7 +59,6 @@ func (s *Server) Push(c *gin.Context) {
 		return
 	}
 
-	// Build metadata JSON from pkg.yao extra fields
 	metadataMap := map[string]interface{}{}
 	if pkgYao.Metadata != nil {
 		metadataMap = pkgYao.Metadata
@@ -77,15 +68,6 @@ func (s *Server) Push(c *gin.Context) {
 	}
 	metadataJSON, _ := json.Marshal(metadataMap)
 
-	// Database transaction
-	tx, err := s.DB.Begin()
-	if err != nil {
-		jsonError(c, http.StatusInternalServerError, "begin tx: "+err.Error())
-		return
-	}
-	defer tx.Rollback()
-
-	// Prepare package metadata
 	keywordsJSON, _ := json.Marshal(pkgYao.Keywords)
 	if pkgYao.Keywords == nil {
 		keywordsJSON = []byte("[]")
@@ -107,8 +89,8 @@ func (s *Server) Push(c *gin.Context) {
 		bugsJSON = []byte("{}")
 	}
 
-	// Upsert package
-	pkgID, err := models.UpsertPackage(tx, &models.Package{
+	// Step 1: upsert package
+	pkgID, err := models.UpsertPackage(s.DB, &models.Package{
 		Type:        singular,
 		Scope:       scope,
 		Name:        name,
@@ -122,15 +104,16 @@ func (s *Server) Push(c *gin.Context) {
 		Repository:  string(repoJSON),
 		Bugs:        string(bugsJSON),
 		Readme:      readme,
-		DistTags:    "{}", // will be updated below
+		DistTags:    "{}",
 	})
 	if err != nil {
+		storage.Delete(s.Config.DataPath, filePath)
 		jsonError(c, http.StatusInternalServerError, "upsert package: "+err.Error())
 		return
 	}
 
-	// Insert version
-	verID, err := models.InsertVersion(tx, &models.Version{
+	// Step 2: insert version
+	verID, err := models.InsertVersion(s.DB, &models.Version{
 		PackageID: pkgID,
 		Version:   version,
 		OS:        goos,
@@ -142,13 +125,12 @@ func (s *Server) Push(c *gin.Context) {
 		FilePath:  filePath,
 	})
 	if err != nil {
-		// Clean up stored file on version insert failure (likely duplicate)
 		storage.Delete(s.Config.DataPath, filePath)
 		jsonError(c, http.StatusConflict, "version already exists")
 		return
 	}
 
-	// Insert dependencies
+	// Step 3: insert dependencies (rollback = delete version + deps + file)
 	if len(pkgYao.Dependencies) > 0 {
 		deps := make([]models.Dependency, len(pkgYao.Dependencies))
 		for i, d := range pkgYao.Dependencies {
@@ -157,17 +139,18 @@ func (s *Server) Push(c *gin.Context) {
 				DepName: d.Name, DepVersion: d.Version,
 			}
 		}
-		if err := models.InsertDependencies(tx, verID, deps); err != nil {
+		if err := models.InsertDependencies(s.DB, verID, deps); err != nil {
+			models.DeleteDependenciesByVersion(s.DB, verID)
+			models.DeleteVersion(s.DB, verID)
 			storage.Delete(s.Config.DataPath, filePath)
 			jsonError(c, http.StatusInternalServerError, "insert deps: "+err.Error())
 			return
 		}
 	}
 
-	// Update dist_tags: set "latest" if this is a non-prerelease version
+	// Step 4: update dist_tags
 	pkg, err := models.GetPackageByID(s.DB, pkgID)
 	if err != nil {
-		// Fall back: use empty dist_tags
 		pkg = &models.Package{DistTags: "{}"}
 	}
 	var distTags map[string]string
@@ -176,23 +159,15 @@ func (s *Server) Push(c *gin.Context) {
 		distTags = map[string]string{}
 	}
 
-	// Set latest for non-prerelease versions (no hyphen in version)
 	if !containsHyphen(version) {
 		distTags["latest"] = version
 	} else if _, ok := distTags["latest"]; !ok {
-		// First ever push is a prerelease — still set latest
 		distTags["latest"] = version
 	}
 
 	distTagsJSON, _ := json.Marshal(distTags)
-	if err := models.UpdateDistTags(tx, pkgID, string(distTagsJSON)); err != nil {
+	if err := models.UpdateDistTags(s.DB, pkgID, string(distTagsJSON)); err != nil {
 		jsonError(c, http.StatusInternalServerError, "update dist_tags: "+err.Error())
-		return
-	}
-
-	if err := tx.Commit(); err != nil {
-		storage.Delete(s.Config.DataPath, filePath)
-		jsonError(c, http.StatusInternalServerError, "commit: "+err.Error())
 		return
 	}
 

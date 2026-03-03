@@ -38,22 +38,16 @@ func (s *Server) Delete(c *gin.Context) {
 		return
 	}
 
-	tx, err := s.DB.Begin()
-	if err != nil {
-		jsonError(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	defer tx.Rollback()
+	// Step 1: delete dependencies
+	models.DeleteDependenciesByVersion(s.DB, ver.ID)
 
-	// Delete dependencies first (may cascade, but be explicit)
-	models.DeleteDependenciesByVersion(tx, ver.ID)
-
-	if err := models.DeleteVersion(tx, ver.ID); err != nil {
+	// Step 2: delete version
+	if err := models.DeleteVersion(s.DB, ver.ID); err != nil {
 		jsonError(c, http.StatusInternalServerError, "delete version: "+err.Error())
 		return
 	}
 
-	// Update dist_tags if the deleted version was tagged
+	// Step 3: update dist_tags if the deleted version was tagged
 	var distTags map[string]string
 	json.Unmarshal([]byte(pkg.DistTags), &distTags)
 	if distTags == nil {
@@ -64,8 +58,7 @@ func (s *Server) Delete(c *gin.Context) {
 	for tag, tagVer := range distTags {
 		if tagVer == version {
 			if tag == "latest" {
-				// Use the tx so the just-deleted version is excluded
-				newLatest, err := models.GetLatestNonPrereleaseTx(tx, pkg.ID)
+				newLatest, err := models.GetLatestNonPrerelease(s.DB, pkg.ID)
 				if err == nil && newLatest != "" {
 					distTags["latest"] = newLatest
 				} else {
@@ -80,15 +73,10 @@ func (s *Server) Delete(c *gin.Context) {
 
 	if tagsChanged {
 		distTagsJSON, _ := json.Marshal(distTags)
-		models.UpdateDistTags(tx, pkg.ID, string(distTagsJSON))
+		models.UpdateDistTags(s.DB, pkg.ID, string(distTagsJSON))
 	}
 
-	if err := tx.Commit(); err != nil {
-		jsonError(c, http.StatusInternalServerError, "commit: "+err.Error())
-		return
-	}
-
-	// Remove file from storage (best effort after successful DB commit)
+	// Best-effort file removal after DB cleanup
 	storage.Delete(s.Config.DataPath, ver.FilePath)
 
 	c.JSON(http.StatusOK, gin.H{
